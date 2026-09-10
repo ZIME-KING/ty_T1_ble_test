@@ -1,0 +1,15 @@
+# 运行时与工具链（体积过大，不入库）
+.dotnet/
+.pyruntime/
+python-3.12.10-amd64.exe
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# 日志与临时输出
+*.log
+gui_err.txt
+gui_out.txt
+probe_err.txt
+probe_out.txt
