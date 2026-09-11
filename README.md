@@ -36,11 +36,12 @@ python BLE_TEST/calib_host/run_smoke.py
 
 ```
 BLE_TEST/
-├─ runtime/                  ← 运行时，不入库
-│  ├─ .dotnet/               ← .NET SDK（可用 BLE_TEST/dotnet-install.ps1 重新获取）
-│  └─ .pyruntime/            ← Python 3.12 embeddable + PySide6
-│     └─ py/python.exe
-└─ ty_T1_ble_test/           ← 本仓库
+├─ runtime/                      ← 运行时与安装包，不入库
+│  ├─ .dotnet/                   ← .NET SDK（可用 BLE_TEST/dotnet-install.ps1 重新获取）
+│  ├─ .pyruntime/                ← Python 3.12 embeddable + PySide6
+│  │  └─ py/python.exe
+│  └─ python-3.12.10-amd64.exe   ← Python 安装包
+└─ ty_T1_ble_test/               ← 本仓库
 ```
 
 源码不引用上述路径，因此运行库位置可以随意调整。若想直接使用外置运行时（无需本机全局安装 Python），在仓库根目录执行：
