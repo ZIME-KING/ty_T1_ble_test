@@ -96,6 +96,24 @@ class Controller(QObject):
         self.ble.start_scan()
         return True
 
+    def set_stds(self, std_v_v: float, std_a_a: float, std_p_w: float) -> bool:
+        """外部(电参数仪)实时刷新标准值，单位 V/A/W；有变化返回 True。
+
+        采集阶段刷新会立即重算界面显示；`_calibrate()` 与记录写入时取的是
+        刷新后的最新快照，因此标准值是持续跟随仪器读数的。
+        """
+        new = {
+            "mv": round(std_v_v * 1000),
+            "ma": round(std_a_a * 1000),
+            "mw": round(std_p_w * 1000),
+        }
+        if new == self._stds:
+            return False
+        self._stds = new
+        if self._busy and self._phase == MEASURE:
+            self._emit_live()
+        return True
+
     def select_device(self, key: str) -> bool:
         """人工确认连接某个已扫到的设备。"""
         if not self._busy or self._phase not in (CHOOSE, CONNECT):

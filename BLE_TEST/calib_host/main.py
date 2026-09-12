@@ -41,7 +41,11 @@ def main():
     ble = BleClient()
     rec = Recorder()
     ctrl = Controller(ble, rec)
-    win = MainWindow(ctrl, rec, ble)
+    meter = None
+    if importlib.util.find_spec("serial") is not None:
+        from meter import MeterClient  # noqa: PLC0415  (电参数仪串口读取)
+        meter = MeterClient()
+    win = MainWindow(ctrl, rec, ble, meter)
     win.show()
     return app.exec()
 

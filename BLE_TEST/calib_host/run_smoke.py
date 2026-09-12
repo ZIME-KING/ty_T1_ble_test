@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-"""离线冒烟测试(无需真实蓝牙)：
+"""离线冒烟测试(无需真实蓝牙/串口)：
 1) protocol 编解码/计算单测(含文档示例)
-2) 用 FakeBLE 驱动 Controller 全流程: PASS / FAIL(设备返回1, 重试耗尽)
-3) UI 离屏构建
+2) meter 电参数仪 MODBUS RTU 帧与单位换算单测
+3) 用 FakeBLE 驱动 Controller 全流程: PASS / FAIL(设备返回1, 重试耗尽)
+4) UI 离屏构建(含电参数仪实时标准源联动)
 
 运行: QT_QPA_PLATFORM=offscreen python run_smoke.py
 """
@@ -63,6 +64,42 @@ def test_protocol():
           [d["new"] for d in det] == list(new0) and
           all(d["skipped"] == (d["std"] <= 0 or d["meas"] <= 0) for d in det),
           f"new={[d['new'] for d in det]} raw={[d['raw'] for d in det]}")
+
+
+# ---------------------------------------------------------------------- #
+# 1.5) meter(电参数仪 MODBUS RTU)协议
+# ---------------------------------------------------------------------- #
+def test_meter():
+    import meter
+
+    check("meter.build_read 0x03 帧",
+          meter.build_read(0, 1).hex() == "010300000001840a",   # MODBUS 标准向量
+          meter.build_read(0, 1).hex())
+
+    # 文档示例应答: 01 03 06 (2122)(3133)(4144) CRC
+    body = bytes([0x01, 0x03, 0x06]) + bytes.fromhex("212231334144")
+    c = meter.crc16(body)
+    resp = body + bytes([c & 0xFF, c >> 8])
+    check("meter.parse_read 文档示例",
+          meter.parse_read(resp, 3) == [0x2122, 0x3133, 0x4144])
+    check("meter.parse_read 拒校验错",
+          meter.parse_read(resp[:-2] + b"\x00\x00", 3) is None)
+
+    regs = [220000 >> 16, 220000 & 0xFFFF, 360 >> 16, 360 & 0xFFFF,
+            79200 >> 16, 79200 & 0xFFFF] + [0] * 14
+    d0 = meter.decode(regs, 0x00)     # 仪器单位 V/A/W
+    check("meter.decode V/A/W",
+          (d0["volts"], d0["amps"], d0["watts"]) == (220.0, 0.36, 79.2),
+          f"{d0['volts']}/{d0['amps']}/{d0['watts']}")
+    d1 = meter.decode(regs, 0x07)     # 仪器单位 kV/mA/kW
+    check("meter.decode 单位位换算",
+          (d1["unit_v"], d1["unit_a"], d1["unit_w"]) == ("kV", "mA", "kW") and
+          d1["volts"] == d0["volts"] * 1000 and
+          d1["amps"] == d0["amps"] / 1000 and
+          d1["watts"] == d0["watts"] * 1000,
+          f"{d1['volts']}/{d1['amps']}/{d1['watts']}")
+    check("meter.decode 负值(Int32)",
+          meter.decode([0xFFFF, 0xFF9C] + [0] * 18, 0)["disp_v"] == -0.1)
 
 
 # ---------------------------------------------------------------------- #
@@ -258,9 +295,37 @@ def test_controller(app, mode: str) -> list:
 # ---------------------------------------------------------------------- #
 def test_ui(app):
     import controller as ctrlmod
+    import meter
     from ble import BleClient
     from recorder import Recorder
     from ui import MainWindow
+
+    class FakeMeter(QObject):
+        """假的电参数仪(避免依赖真实串口)。"""
+        message = Signal(str, str)
+        reading = Signal(dict)
+        link_changed = Signal(bool)
+        ports_changed = Signal(list)
+
+        def __init__(self, parent=None):
+            super().__init__(parent)
+            self.is_open = False
+
+        @staticmethod
+        def available_ports():
+            return [{"device": "COM9", "desc": "USB-SERIAL CH340"}]
+
+        def refresh_ports(self):
+            self.ports_changed.emit(self.available_ports())
+
+        def open(self, port):
+            self.is_open = True
+            self.link_changed.emit(True)
+            return True
+
+        def close(self):
+            self.is_open = False
+            self.link_changed.emit(False)
 
     class NoBle(BleClient):
         """避免真实扫蓝牙；仅构建 UI。"""
@@ -268,7 +333,8 @@ def test_ui(app):
     ble = NoBle()
     rec = Recorder(Path("calib_logs"))
     ctrl = ctrlmod.Controller(ble, rec)
-    win = MainWindow(ctrl, rec, ble)
+    meter_cli = FakeMeter()
+    win = MainWindow(ctrl, rec, ble, meter_cli)
     win.show()
     app.processEvents()
     check("UI 构建", win.isVisible())
@@ -277,6 +343,20 @@ def test_ui(app):
                       "addr": "AA:BB:CC:DD:EE:FF", "rssi": -45, "target": True}])
     app.processEvents()
     check("设备表格填充", win.dev_table.rowCount() == 1)
+
+    # 串口列表 + 实时标准源联动
+    check("串口列表填充", win.cb_port.count() == 1, win.cb_port.currentText())
+    meter_cli.reading.emit(meter.decode(
+        [220000 >> 16, 220000 & 0xFFFF, 360 >> 16, 360 & 0xFFFF,
+         79200 >> 16, 79200 & 0xFFFF] + [0] * 14, 0x00))
+    app.processEvents()
+    win.chk_mstd.setChecked(True)
+    app.processEvents()
+    check("实时标准源联动到控制器",
+          ctrl._stds == {"mv": 220000, "ma": 360, "mw": 79200}, str(ctrl._stds))
+    check("④ 标准值跟随并只读",
+          (win.sb_v.value(), win.sb_a.value(), win.sb_w.value()) == (220.0, 0.36, 79.2)
+          and win.sb_v.isReadOnly())
     win.close()
     app.processEvents()
 
@@ -285,6 +365,8 @@ if __name__ == "__main__":
     print("=== 1. protocol ===")
     test_protocol()
     app = QApplication(sys.argv)
+    print("=== 1.5 meter ===")
+    test_meter()
     print("=== 2. 全流程 PASS ===")
     test_controller(app, "pass")
     print("=== 3. 全流程 FAIL(设备返回1) ===")

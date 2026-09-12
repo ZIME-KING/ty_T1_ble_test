@@ -20,11 +20,48 @@ pip install -r BLE_TEST/calib_host/requirements.txt
 
 ## 启动
 
+### 方式一：本机已全局安装 Python
+
+在仓库根目录（`ty_T1_ble_test/`）执行：
+
 ```
 python BLE_TEST/calib_host/main.py
 ```
 
-冒烟测试（不连实机，走内置模拟）：
+### 方式二：使用外置运行时（推荐，PowerShell 绝对路径）
+
+不依赖本机全局 Python，直接调用 `runtime/` 下的解释器。在 **PowerShell** 中执行（路径按本机实际位置替换）：
+
+```powershell
+& "C:\Users\95228\Desktop\BLE_TEST\runtime\.pyruntime\py\python.exe" "C:\Users\95228\Desktop\BLE_TEST\ty_T1_ble_test\BLE_TEST\calib_host\main.py"
+```
+
+语句构成：
+
+| 片段 | 含义 |
+| --- | --- |
+| `&` | PowerShell 调用运算符，把后面的字符串当作可执行程序运行。路径带引号时必须加，否则会被当成纯文本报语法错误 |
+| 第 1 个参数 | 解释器 `python.exe` 的绝对路径 |
+| 第 2 个参数 | 脚本 `main.py` 的绝对路径 |
+
+等价写法（在 `calib_host/` 目录下简写）：
+
+```powershell
+cd C:\Users\95228\Desktop\BLE_TEST\ty_T1_ble_test\BLE_TEST\calib_host
+& "C:\Users\95228\Desktop\BLE_TEST\runtime\.pyruntime\py\python.exe" main.py
+```
+
+CMD 下的等价写法：
+
+```cmd
+"C:\Users\95228\Desktop\BLE_TEST\runtime\.pyruntime\py\python.exe" "C:\Users\95228\Desktop\BLE_TEST\ty_T1_ble_test\BLE_TEST\calib_host\main.py"
+```
+
+> `main.py` 会把自身所在目录插入 `sys.path`，因此启动目录不影响 `controller`/`recorder`/`ui` 的导入。
+>
+> 若报 `ModuleNotFoundError: No module named 'PySide6'`，说明用错了解释器——请改用上面 `runtime\.pyruntime\py\python.exe`，或先按「依赖安装」一节为当前解释器安装依赖。
+
+### 冒烟测试（不连实机，走内置模拟）
 
 ```
 python BLE_TEST/calib_host/run_smoke.py

@@ -5,40 +5,151 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
-    QApplication, QDoubleSpinBox, QGridLayout, QGroupBox, QHBoxLayout,
-    QHeaderView, QLabel, QLineEdit, QMainWindow, QPushButton,
+    QApplication, QCheckBox, QComboBox, QDoubleSpinBox, QGridLayout, QGroupBox,
+    QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QPushButton,
     QPlainTextEdit, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout,
     QWidget,
 )
 
 from controller import CHOOSE, CONNECT, WRITE, Controller
 
-COLORS = {"info": "#666", "ok": "#0a0", "err": "#c00", "dbg": "#888"}
+COLORS = {"info": "#c9d1d9", "ok": "#4ade80", "err": "#ff7b72", "dbg": "#8b949e"}
+
+# 每个功能模块的主色：决定标题色块与左侧色条, 便于一眼区分模块
+ACCENT = {
+    "ops": "#c05621",    # 序号与操作
+    "dev": "#2b6cb0",    # 蓝牙设备
+    "meter": "#0f766e",  # 电参数仪(串口)
+    "std": "#b7791f",    # 标准源设定
+    "live": "#2f855a",   # 实时测量
+}
+
+
+def _build_qss() -> str:
+    base = """
+QWidget#central { background:#eef1f6; }
+
+QGroupBox {
+    background:#ffffff;
+    border:1px solid #d7dee8;
+    border-radius:8px;
+    margin-top:20px;
+    padding:10px;
+    font-size:13px;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left:12px; top:2px;
+    padding:3px 12px;
+    border-radius:4px;
+    color:#ffffff;
+    font-weight:bold;
+}
+
+QLineEdit, QSpinBox, QDoubleSpinBox {
+    background:#ffffff; border:1px solid #cbd5e0;
+    border-radius:6px; padding:4px 8px;
+}
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus { border:1px solid #3182ce; }
+QLineEdit:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled {
+    background:#f1f4f8; color:#a0aec0; border-color:#e2e8f0;
+}
+
+QPushButton {
+    background:#ffffff; border:1px solid #cbd5e0;
+    border-radius:6px; padding:6px 14px;
+}
+QPushButton:hover { background:#f0f5fb; border-color:#90b4dd; }
+QPushButton:pressed { background:#e2ecf7; }
+QPushButton:disabled { background:#f1f4f8; color:#a0aec0; border-color:#e2e8f0; }
+QPushButton#primary { background:#f6c445; border-color:#d9a520; font-weight:bold; }
+QPushButton#primary:hover { background:#ffd666; border-color:#d9a520; }
+QPushButton#primary:disabled { background:#f1f4f8; color:#a0aec0; border-color:#e2e8f0; }
+QPushButton#confirm { background:#bfe3c6; border-color:#8fc79a; font-weight:bold; }
+QPushButton#confirm:hover { background:#d3efd9; border-color:#8fc79a; }
+QPushButton#confirm:disabled { background:#f1f4f8; color:#a0aec0; border-color:#e2e8f0; }
+
+QTableWidget {
+    background:#ffffff;
+    alternate-background-color:#f6f9fc;
+    gridline-color:#e4eaf2;
+    border:1px solid #d7dee8;
+    border-radius:6px;
+    selection-background-color:#cfe3fb;
+    selection-color:#1a202c;
+}
+QHeaderView::section {
+    background:#e9eff7; color:#2d3748;
+    padding:6px 8px; font-weight:bold; border:none;
+    border-right:1px solid #d7dee8;
+    border-bottom:1px solid #d7dee8;
+}
+QTableWidget QTableCornerButton::section { background:#e9eff7; border:none; }
+
+QPlainTextEdit#log {
+    background:#1e222a; color:#d6dbe4;
+    border:1px solid #2d333d; border-radius:8px; padding:8px;
+    font-family:Consolas,monospace; font-size:12px;
+}
+"""
+    parts = [base]
+    for key, color in ACCENT.items():
+        parts.append(
+            f"QGroupBox#{key}Box {{ border-left:4px solid {color}; }}\n"
+            f"QGroupBox#{key}Box::title {{ background:{color}; }}\n")
+    return "".join(parts)
+
+
+_QSS = _build_qss()
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, controller, recorder, ble=None):
+    def __init__(self, controller, recorder, ble=None, meter=None):
         super().__init__()
         self.ctrl = controller
         self.rec = recorder
         self.ble = ble
+        self.meter = meter
+        self._last_meter: dict | None = None   # 最近一次电参数仪读数
         self.setWindowTitle("HLW8112 BLE 批量校准台")
-        self.resize(1160, 920)
+        self.resize(1440, 800)
+        self.setMinimumSize(1180, 660)
 
         cw = QWidget()
+        cw.setObjectName("central")
         self.setCentralWidget(cw)
+        self.setStyleSheet(_QSS)
         root = QVBoxLayout(cw)
+        root.setContentsMargins(14, 14, 14, 14)
+        root.setSpacing(12)
+
+        # 左右双栏：左=操作与输入, 右=测量与结果
+        cols = QHBoxLayout()
+        cols.setSpacing(12)
+        left = QVBoxLayout()
+        left.setSpacing(12)
+        right = QVBoxLayout()
+        right.setSpacing(12)
+        cols.addLayout(left, 1)
+        cols.addLayout(right, 1)
 
         # ---- 状态大字 ----
         self.lbl_banner = QLabel("待机")
         self.lbl_banner.setStyleSheet(
-            "font-size:26px;font-weight:bold;color:#036;"
-            "background:#eef;border:1px solid #bbb;border-radius:6px;padding:6px;")
+            "font-size:26px;font-weight:bold;color:#1a365d;letter-spacing:1px;"
+            "background:#e7f0fb;border:1px solid #a9c8e8;"
+            "border-left:6px solid #2b6cb0;border-radius:8px;padding:10px;")
         self.lbl_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_banner.setMinimumHeight(58)
         root.addWidget(self.lbl_banner)
 
-        # ---- SN + 操作 ----
-        sn_row = QHBoxLayout()
+        # ---- ① SN + 操作 ----
+        gops = QGroupBox("① 序号与操作")
+        gops.setObjectName("opsBox")
+        sn_row = QHBoxLayout(gops)
+        sn_row.setContentsMargins(10, 6, 10, 10)
+        sn_row.setSpacing(8)
         sn_row.addWidget(QLabel("SN:"))
         self.sn_edit = QLineEdit()
         self.sn_edit.setPlaceholderText("扫描/连接后测量完成时再输入(确认写入系数时必填)")
@@ -49,9 +160,8 @@ class MainWindow(QMainWindow):
         self.btn_start = QPushButton("开始扫描")
         self.btn_start.clicked.connect(self._on_sn_enter)
         self.btn_write = QPushButton("确认写入系数")
+        self.btn_write.setObjectName("primary")
         self.btn_write.setEnabled(False)
-        self.btn_write.setStyleSheet(
-            "font-weight:bold;background:#ffe28a;padding:4px 12px;")
         self.btn_write.clicked.connect(self._confirm_write)
         self.btn_abort = QPushButton("中止当前")
         self.btn_abort.setEnabled(False)
@@ -59,46 +169,99 @@ class MainWindow(QMainWindow):
         sn_row.addWidget(self.btn_start)
         sn_row.addWidget(self.btn_write)
         sn_row.addWidget(self.btn_abort)
-        root.addLayout(sn_row)
+        left.addWidget(gops)
 
-        # ---- 扫描到的蓝牙(全部列出, 人工点选确认) ----
-        gdev = QGroupBox("扫描到的蓝牙设备(自动刷新列表, 选中后确认连接)")
+        # ---- ② 扫描到的蓝牙(全部列出, 人工点选确认) ----
+        gdev = QGroupBox("② 扫描到的蓝牙设备 (自动刷新, 选中后点【确认连接】)")
+        gdev.setObjectName("devBox")
         dv = QVBoxLayout(gdev)
+        dv.setContentsMargins(10, 6, 10, 10)
+        dv.setSpacing(8)
         self.dev_table = QTableWidget(0, 4)
         self.dev_table.setHorizontalHeaderLabels(["名称", "地址", "RSSI", "类型"])
         self.dev_table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.dev_table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.dev_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.dev_table.setMaximumHeight(200)
+        self.dev_table.setAlternatingRowColors(True)
+        self.dev_table.verticalHeader().setVisible(False)
+        self.dev_table.setMinimumHeight(120)
         self.dev_table.itemSelectionChanged.connect(self._sync_dev_btns)
         self.dev_table.cellDoubleClicked.connect(lambda *a: self._confirm_device())
         hh = self.dev_table.horizontalHeader()
         hh.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         hh.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        dv.addWidget(self.dev_table)
+        dv.addWidget(self.dev_table, 1)
         dr = QHBoxLayout()
         self.lbl_dev_status = QLabel("")
-        self.lbl_dev_status.setStyleSheet("color:#888;")
+        self.lbl_dev_status.setStyleSheet(
+            "color:#4a5568;background:#eef1f6;border-radius:4px;padding:3px 8px;")
         dr.addWidget(self.lbl_dev_status, 1)
         self.btn_rescan = QPushButton("重新扫描")
         self.btn_rescan.clicked.connect(self._on_rescan)
         self.btn_confirm = QPushButton("确认连接所选设备")
+        self.btn_confirm.setObjectName("confirm")
         self.btn_confirm.setEnabled(False)
-        self.btn_confirm.setStyleSheet(
-            "font-weight:bold;background:#d8ecd8;padding:4px 12px;")
         self.btn_confirm.clicked.connect(self._confirm_device)
         dr.addWidget(self.btn_rescan)
         dr.addWidget(self.btn_confirm)
         dv.addLayout(dr)
-        root.addWidget(gdev)
+        left.addWidget(gdev, 1)
         self._dev_rows: dict[int, str] = {}   # 行号 -> 设备 key
         if ble is not None:
             ble.devices_changed.connect(self._on_devices)
             ble.scanning_changed.connect(self._on_scanning)
 
-        # ---- 标准源参数 ----
-        gb = QGroupBox("标准源设定(0 表示该通道不校准)")
+        # ---- ③ 电参数仪(串口 MODBUS RTU, 可作实时标准源) ----
+        gmt = QGroupBox("③ 电参数仪 (Modbus RTU 9600-8-N-1, 从站 1)")
+        gmt.setObjectName("meterBox")
+        g3 = QGridLayout(gmt)
+        g3.setContentsMargins(10, 6, 10, 10)
+        g3.setHorizontalSpacing(8)
+        g3.setVerticalSpacing(8)
+        g3.setColumnStretch(1, 1)
+        g3.addWidget(QLabel("串口"), 0, 0)
+        self.cb_port = QComboBox()
+        g3.addWidget(self.cb_port, 0, 1)
+        self.btn_mrefresh = QPushButton("刷新")
+        self.btn_mrefresh.clicked.connect(self._on_port_refresh)
+        g3.addWidget(self.btn_mrefresh, 0, 2)
+        self.btn_mopen = QPushButton("连接电参数仪")
+        self.btn_mopen.setObjectName("confirm")
+        self.btn_mopen.clicked.connect(self._on_meter_toggle)
+        g3.addWidget(self.btn_mopen, 0, 3)
+        self.lbl_meter = QLabel("未连接")
+        self.lbl_meter.setStyleSheet(
+            "font-family:Consolas;font-size:12px;color:#22543d;"
+            "background:#f0fbf9;border:1px solid #b2e0d8;"
+            "border-radius:4px;padding:5px 8px;")
+        g3.addWidget(self.lbl_meter, 1, 0, 1, 4)
+        self.chk_mstd = QCheckBox("取电参数仪实时值为标准源(勾选后 ④ 自动跟随)")
+        self.chk_mstd.setEnabled(False)
+        self.chk_mstd.toggled.connect(self._on_std_src_toggled)
+        g3.addWidget(self.chk_mstd, 2, 0, 1, 4)
+        left.addWidget(gmt)
+
+        if meter is not None:
+            meter.message.connect(self._on_log)
+            meter.reading.connect(self._on_meter_reading)
+            meter.link_changed.connect(self._on_meter_link)
+            meter.ports_changed.connect(self._on_ports)
+            self._on_ports(meter.available_ports())
+        else:
+            self.lbl_meter.setText(
+                "未安装 pyserial, 电参数仪不可用 (pip install pyserial)")
+            for w in (self.cb_port, self.btn_mrefresh, self.btn_mopen):
+                w.setEnabled(False)
+
+        # ---- ④ 标准源参数 ----
+        gb = QGroupBox("④ 标准源设定 (填 0 表示该通道不校准; 勾选③后自动跟随仪器)")
+        gb.setObjectName("stdBox")
         gp = QGridLayout(gb)
+        gp.setContentsMargins(10, 6, 10, 10)
+        gp.setHorizontalSpacing(10)
+        gp.setVerticalSpacing(8)
+        gp.setColumnStretch(1, 1)
+        gp.setColumnStretch(3, 1)
         self.sb_v = self._spin(0, 1000, 3, " V")
         self.sb_a = self._spin(0, 100, 4, " A")
         self.sb_w = self._spin(0, 100000, 3, " W")
@@ -109,57 +272,80 @@ class MainWindow(QMainWindow):
         gp.addWidget(self.sb_v, 0, 1)
         gp.addWidget(QLabel("标准电流"), 0, 2)
         gp.addWidget(self.sb_a, 0, 3)
-        gp.addWidget(QLabel("标准功率"), 0, 4)
-        gp.addWidget(self.sb_w, 0, 5)
-        gp.addWidget(QLabel("平均帧数"), 1, 0)
+        gp.addWidget(QLabel("标准功率"), 1, 0)
+        gp.addWidget(self.sb_w, 1, 1)
+        gp.addWidget(QLabel("平均帧数"), 1, 2)
         self.sb_avg = QSpinBox()
         self.sb_avg.setRange(3, 30)
         self.sb_avg.setValue(8)
         self.sb_avg.setSuffix(" 帧(约1s/帧)")
-        gp.addWidget(self.sb_avg, 1, 1)
+        gp.addWidget(self.sb_avg, 1, 3)
         self.lbl_recpath = QLabel("")
-        gp.addWidget(self.lbl_recpath, 1, 2, 1, 3)
+        self.lbl_recpath.setStyleSheet("color:#4a5568;")
+        gp.addWidget(self.lbl_recpath, 2, 0, 1, 3)
         btn_open = QPushButton("打开记录目录")
         btn_open.clicked.connect(self._open_log_dir)
-        gp.addWidget(btn_open, 1, 5)
-        root.addWidget(gb)
+        gp.addWidget(btn_open, 2, 3)
+        left.addWidget(gb)
 
-        # ---- 实测实时面板 ----
-        gb2 = QGroupBox("实时测量")
+        # ---- ⑤ 实测实时面板 ----
+        gb2 = QGroupBox("⑤ 实时测量")
+        gb2.setObjectName("liveBox")
         g2 = QGridLayout(gb2)
+        g2.setContentsMargins(10, 6, 10, 10)
+        g2.setHorizontalSpacing(14)
+        g2.setVerticalSpacing(7)
         heads = ["通道", "标准值", "实测均值", "误差", "帧数"]
         self.lbl_meas = {}
         for i, h in enumerate(heads):
-            g2.addWidget(QLabel(f"<b>{h}</b>"), 0, i)
+            th = QLabel(h)
+            th.setStyleSheet("color:#2f855a;font-weight:bold;")
+            g2.addWidget(th, 0, i)
         rows = [("电压", "V"), ("电流", "A"), ("功率", "W")]
         for r, (name, unit) in enumerate(rows, start=1):
-            g2.addWidget(QLabel(name), r, 0)
+            nl = QLabel(name)
+            nl.setStyleSheet("color:#4a5568;")
+            g2.addWidget(nl, r, 0)
             for c in range(1, 4):
                 lab = QLabel("-")
                 lab.setAlignment(Qt.AlignmentFlag.AlignRight)
                 g2.addWidget(lab, r, c)
                 self.lbl_meas[(name, c)] = lab
             self.lbl_meas[(name, 4)] = QLabel("-")
+            self.lbl_meas[(name, 4)].setAlignment(Qt.AlignmentFlag.AlignRight)
             g2.addWidget(self.lbl_meas[(name, 4)], r, 4)
         g2.addWidget(QLabel("系数"), 4, 0)
         self.lbl_coeff = QLabel("iac: -    uc: -    pac: -")
-        self.lbl_coeff.setStyleSheet("font-family:Consolas;")
+        self.lbl_coeff.setStyleSheet(
+            "font-family:Consolas;font-size:13px;color:#22543d;"
+            "background:#f0fff4;border:1px solid #c6f6d5;"
+            "border-radius:4px;padding:6px 8px;")
         g2.addWidget(self.lbl_coeff, 4, 1, 1, 4)
         g2.addWidget(QLabel("换算过程"), 5, 0)
         self.lbl_calc = QLabel("等待测量数据 ...")
         self.lbl_calc.setStyleSheet(
-            "font-family:Consolas;font-size:11px;color:#333;")
+            "font-family:Consolas;font-size:11px;color:#2d3748;"
+            "background:#f8fafc;border:1px dashed #cbd5e0;"
+            "border-radius:4px;padding:6px 8px;")
         self.lbl_calc.setWordWrap(True)
         self.lbl_calc.setAlignment(Qt.AlignmentFlag.AlignLeft
                                    | Qt.AlignmentFlag.AlignTop)
         g2.addWidget(self.lbl_calc, 5, 1, 1, 4)
-        root.addWidget(gb2)
+        right.addWidget(gb2)
 
-        # ---- 统计 + 记录表 ----
-        root.addWidget(QLabel("<b>批量记录</b>"))
+        # ---- ⑥ 统计 + 记录表 ----
+        lbl_rec = QLabel("⑥ 批量记录")
+        lbl_rec.setStyleSheet(
+            "font-size:15px;font-weight:bold;color:#4c3d99;"
+            "background:#ede9fe;border-left:4px solid #6b46c1;"
+            "border-radius:4px;padding:5px 10px;")
+        right.addWidget(lbl_rec)
         self.lbl_stats = QLabel("总数 0    通过 0    失败 0")
-        self.lbl_stats.setStyleSheet("font-size:14px;color:#036;")
-        root.addWidget(self.lbl_stats)
+        self.lbl_stats.setStyleSheet(
+            "font-size:14px;font-weight:bold;color:#4a5568;"
+            "background:#ffffff;border:1px solid #e2e8f0;"
+            "border-radius:6px;padding:6px 10px;")
+        right.addWidget(self.lbl_stats)
         self.table = QTableWidget(0, 8)
         self.table.setHorizontalHeaderLabels(
             ["时间", "SN", "结果", "标准V/A/W", "实测V/A/W", "新系数iac/uc/pac", "尝试", "备注"])
@@ -167,15 +353,26 @@ class MainWindow(QMainWindow):
         hh.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         hh.setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        root.addWidget(self.table, 1)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setVisible(False)
+        right.addWidget(self.table, 2)
 
-        # ---- 日志 ----
-        root.addWidget(QLabel("<b>日志</b>"))
+        # ---- ⑦ 日志 ----
+        lbl_log = QLabel("⑦ 日志")
+        lbl_log.setStyleSheet(
+            "font-size:15px;font-weight:bold;color:#2d3748;"
+            "background:#e2e8f0;border-left:4px solid #4a5568;"
+            "border-radius:4px;padding:5px 10px;")
+        right.addWidget(lbl_log)
         self.log = QPlainTextEdit()
+        self.log.setObjectName("log")
         self.log.setReadOnly(True)
         self.log.setMaximumBlockCount(2000)
-        self.log.setStyleSheet("font-family:Consolas,monospace;font-size:12px;")
-        root.addWidget(self.log, 1)
+        self.log.setMinimumHeight(140)
+        right.addWidget(self.log, 1)
+
+        root.addLayout(cols, 1)
 
         # 信号
         controller.status.connect(self._on_status)
@@ -299,6 +496,74 @@ class MainWindow(QMainWindow):
         self.ctrl.rescan()
 
     # ------------------------------------------------------------------ #
+    # 电参数仪(串口) meter.reading / link_changed / ports_changed
+    # ------------------------------------------------------------------ #
+    def _on_ports(self, ports: list):
+        keep = self.cb_port.currentData()
+        self.cb_port.clear()
+        for p in ports:
+            self.cb_port.addItem(f"{p['device']}  {p['desc']}".strip(), p["device"])
+        if not ports:
+            self.lbl_meter.setText("未发现串口, 插好 USB 转串口后点【刷新】")
+            return
+        if keep:
+            i = self.cb_port.findData(keep)
+            if i >= 0:
+                self.cb_port.setCurrentIndex(i)
+
+    def _on_port_refresh(self):
+        if self.meter is not None:
+            self.meter.refresh_ports()
+
+    def _on_meter_toggle(self):
+        if self.meter is None:
+            return
+        if self.meter.is_open:
+            self.meter.close()
+            return
+        port = self.cb_port.currentData()
+        if not port:
+            self.lbl_meter.setText("未发现串口, 请插入 USB 后点【刷新】")
+            return
+        self.meter.open(port)
+
+    def _on_meter_link(self, opened: bool):
+        self.btn_mopen.setText("断开电参数仪" if opened else "连接电参数仪")
+        self.cb_port.setEnabled(not opened)
+        self.btn_mrefresh.setEnabled(not opened and self.meter is not None)
+        if opened:
+            return
+        self.chk_mstd.setEnabled(False)
+        self.chk_mstd.setChecked(False)      # 触发 _on_std_src_toggled 恢复手工输入
+        self.lbl_meter.setText("未连接")
+
+    def _on_meter_reading(self, d: dict):
+        self._last_meter = d
+        self.chk_mstd.setEnabled(True)
+        self.lbl_meter.setText(
+            f"{d['time']}  V {d['disp_v']:.4g} {d['unit_v']}"
+            f"  A {d['disp_a']:.4g} {d['unit_a']}"
+            f"  W {d['disp_w']:.4g} {d['unit_w']}"
+            f"  (单位位 0x{d['unit_word']:02X})")
+        if self.chk_mstd.isChecked():
+            self._apply_meter_std(d)
+
+    def _on_std_src_toggled(self, checked: bool):
+        """勾选后 ④ 的标准值只读并实时跟随仪器读数。"""
+        for sb in (self.sb_v, self.sb_a, self.sb_w):
+            sb.setReadOnly(checked)
+        if checked and self._last_meter is not None:
+            self._apply_meter_std(self._last_meter)
+
+    def _apply_meter_std(self, d: dict):
+        for sb, val in ((self.sb_v, d["volts"]), (self.sb_a, d["amps"]),
+                        (self.sb_w, d["watts"])):
+            sb.blockSignals(True)
+            sb.setValue(val)
+            sb.blockSignals(False)
+        self.ctrl.set_stds(d["volts"], d["amps"], d["watts"])
+
+    # ------------------------------------------------------------------ #
     def _on_status(self, text: str):
         self.lbl_banner.setText(text)
         self._sync_dev_btns()
@@ -374,5 +639,7 @@ class MainWindow(QMainWindow):
         QDesktopServices.openUrl(QUrl.fromLocalFile(target))
 
     def closeEvent(self, ev):
+        if self.meter is not None:
+            self.meter.close()
         self.ctrl.shutdown()
         super().closeEvent(ev)
